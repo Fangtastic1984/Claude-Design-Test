@@ -83,9 +83,27 @@ Notes:
 │  └──────────────────────────────┘   └────────────────┘                                             │
 │                          ▲ reverse proxy (nginx/caddy, TLS) ▲                                       │
 └─────────────────────────────────────────────────────────────────────────────────────────────────────┘
-External: Ozow (payments) · SMTP provider (OTP + transactional email, TBC) ·
-          Web Push (VAPID, no third party) · Claude API (used by n8n; app exposes data to it)
+External: Ozow (payments) · Web Push (VAPID, no third party) · Claude API (used by n8n)
+Local:    Postfix/Dovecot (existing self-hosted email stack — OTP + transactional via
+          noreply@olifantcollab.co.za; SPF/DKIM/DMARC already configured)
 ```
+
+### Hosting reality (from platform skill, 2026-06 revision)
+- **Server**: Afrihost VPS `165.73.0.106`, Ubuntu 24.04 LTS, R400/month all-in. Existing
+  services that must keep running untouched: nginx (TLS via Let's Encrypt, auto-renew),
+  WordPress (live site with published Privacy Policy & ToS), Postfix/Dovecot mail stack,
+  UFW + Fail2Ban, n8n containers. RAM/CPU headroom **[TBC — check before phase 7]**.
+- **Coexistence, then cutover**: the live WordPress site at `olifantcollab.co.za` stays up
+  during the build. Hub v2 deploys to **`hub.olifantcollab.co.za`** (new nginx server block
+  + Let's Encrypt cert) alongside it. Root-domain cutover (and WordPress retirement) is a
+  separate, reversible step at the end of phase 7 — Privacy Policy and ToS pages are
+  recreated in the app before cutover so the published URLs never go dark.
+- **Email**: OTP and transactional mail go through the local Postfix relay — no external
+  provider needed. Respect the standing DMARC decision: stays at `p=quarantine`; the app
+  adds no new sending domains or `From` identities beyond `noreply@olifantcollab.co.za`.
+- **Database**: PostgreSQL 15 already runs for n8n (`n8n-postgres-1`, localhost-only).
+  Hub gets its **own postgres container** so Hub load/upgrades never touch n8n (now firm,
+  not a deploy-time call). MySQL/WordPress is untouched until retirement.
 
 - **One repo, one deployable app.** Next.js (App Router, TypeScript) serves public pages,
   the PWA, the admin dashboard, the driver screen, and all API routes. Prisma owns the
@@ -96,13 +114,12 @@ External: Ozow (payments) · SMTP provider (OTP + transactional email, TBC) ·
   app's job scheduler.
 - **Jobs**: in-process scheduler (cron-style) inside the app container — no extra
   infrastructure on a single server. Every job is idempotent and logged.
-- **Database**: a new `hub` PostgreSQL database. It can run in the existing
-  `n8n-postgres-1` instance or its own container — own container recommended so Hub
-  load and upgrades never touch n8n (final call at deploy time).
+- **Database**: a new `hub` PostgreSQL database in its own container, separate from
+  `n8n-postgres-1` (see Hosting reality below).
 - **Files** (banner images, menu photos): stored on a Docker volume, served via the app
   with size/type validation; images resized server-side to web-friendly variants.
-- **Domains**: target `hub.olifantcollab.co.za` for the app (final mapping confirmed at
-  deploy; old `taskboard.` route can redirect).
+- **Domains**: `hub.olifantcollab.co.za` for the app during build and initial launch;
+  root-domain cutover decided at end of phase 7 (see Hosting reality).
 
 ---
 
@@ -473,8 +490,10 @@ is a checklist violation).
    payments, driver job board + state machine, tracking, ratings.
 6. **Admin & ops hardening** — remaining admin panels, audit log, job health, backups,
    webhook layer for n8n, pre-deployment checklist pass (skill §10 — run as a gate).
-7. **Deploy** — Docker Compose to the existing server beside n8n, reverse proxy + TLS,
-   domain cutover, monitoring/alerting, verified backup restore.
+7. **Deploy** — Docker Compose to the Afrihost VPS beside n8n and the mail stack; new
+   nginx server block + cert for `hub.olifantcollab.co.za`; monitoring/alerting; verified
+   backup restore; recreate Privacy Policy & ToS in-app; then (as a separate, reversible
+   step) root-domain cutover and WordPress retirement.
 
 Each phase ends in a deployable state; phases 2 and 5 each conclude with a review
 checkpoint with Lereo before the next begins.
@@ -522,20 +541,36 @@ checkpoint with Lereo before the next begins.
   · Replaces: undecided.
 - **2026-06-11** · Pothole pilot out of scope for this codebase · Lereo (Q6) · Replaces:
   its standing as first live use case *within this rebuild* (the pilot itself is unaffected).
+- **2026-06-11** · OTP + transactional email via the existing self-hosted Postfix stack
+  (`noreply@olifantcollab.co.za`), honouring the standing DMARC `p=quarantine` decision ·
+  Stack is operational with SPF/DKIM/DMARC (skill 2026-06 revision); no external provider
+  cost · Replaces: "SMTP provider TBC" open item.
+- **2026-06-11** · Hub gets its own PostgreSQL container, separate from `n8n-postgres-1` ·
+  Hub load/upgrades must never touch n8n · Replaces: deploy-time call.
+- **2026-06-11** · Deploy to `hub.olifantcollab.co.za` alongside the live WordPress site;
+  root-domain cutover is a separate reversible step after phase 7 · Live site (legal pages,
+  email, analytics dashboard) must not go dark mid-build · Replaces: implied immediate
+  replacement of the root domain.
 
 ## 15. Open items (TBC before or at the relevant phase)
 
 1. **Delivery fee value + cash settlement mechanics** — confirm with the three-wheeler
    partner business (blocks phase 5 launch, not its build).
-2. **SMTP provider** for OTP/transactional email (blocks phase 1 deploy; any provider or
-   existing mailbox SMTP works — interface is pluggable).
-3. **Ozow recurring** availability on Lereo's account (payment-request fallback already
+2. **Ozow recurring** availability on Lereo's account (payment-request fallback already
    specced either way).
-4. **Server headroom check** (RAM/CPU) and dedicated-vs-shared Postgres container —
-   verified at phase 7.
-5. **Domain mapping** (`hub.olifantcollab.co.za` assumed) — phase 7.
-6. **WABA resolution** — when ready: WhatsApp OTP, order notifications, and the n8n rating
-   reply loop activate against interfaces already in place.
+3. **Server headroom check** — Afrihost VPS RAM/CPU specs unknown; verify the box can run
+   hub-app + hub-postgres alongside WordPress/MySQL, n8n, and the mail stack (phase 7;
+   if tight, WordPress retirement frees resources at cutover).
+4. **WABA resolution** — Meta Business Verification submitted 2026-02-06, still pending.
+   When approved: WhatsApp OTP, order notifications, and the n8n rating reply loop
+   activate against interfaces already in place.
+5. **Root-domain cutover timing** — when does `olifantcollab.co.za` switch from WordPress
+   to the Hub app (and WordPress retire)? Lereo's call after phase 7 ships on the subdomain.
+6. **Launch-timing alignment** — the skill targets a June 2026 launch (~100–150 cohort)
+   on the *existing* React taskboard, while this rebuild lands phase-by-phase. Needs an
+   explicit call: launch on the old taskboard and migrate later, or hold launch for
+   phase 2 of the rebuild (which recreates the platform). Fresh-start decision (Q1) makes
+   "launch old, rebuild quietly, swap" messy if real listings accumulate in the old system.
 7. Inherited and still open from the skill: goods marketplace, provider directory,
    referral content, multi-category bundled postings, taxonomy validation with other
-   residents.
+   residents, out-of-area signup policy, staging environment.
